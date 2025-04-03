@@ -3,6 +3,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: Date;
+  isVisible?: boolean;
 }
 
 export type ChatMessage = {

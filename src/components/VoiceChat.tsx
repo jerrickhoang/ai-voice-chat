@@ -72,13 +72,21 @@ const createAppTheme = (darkMode: boolean) => createTheme({
   },
 });
 
+// Add a new type for message with visibility status
+type VisibleMessage = Message & {
+  isVisible: boolean;
+};
+
 const VoiceChat: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Update message state to include visibility flag
+  const [messages, setMessages] = useState<VisibleMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState('alloy');
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  // Add a reference to the latest assistant message
+  const latestAssistantMessageRef = useRef<string | null>(null);
   
   // Add dark mode state
   const prefersDarkMode = useMediaQuery('(prefers-color-scheme: dark)');
@@ -125,12 +133,13 @@ const VoiceChat: React.FC = () => {
   const submitMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
     
-    // Add user message to the chat
-    const userMessage: Message = {
+    // Add user message to the chat (always visible)
+    const userMessage: VisibleMessage = {
       id: uuidv4(),
       role: 'user',
       content,
       createdAt: new Date(),
+      isVisible: true, // User messages are always visible immediately
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -159,39 +168,44 @@ const VoiceChat: React.FC = () => {
       }
 
       const data = await response.text();
+      
+      // Store the latest assistant message for reference
+      latestAssistantMessageRef.current = data;
 
-      // Add AI response to the chat
-      const assistantMessage: Message = {
+      // Add AI response to the chat but make it invisible initially
+      const assistantMessage: VisibleMessage = {
         id: uuidv4(),
         role: 'assistant',
         content: data,
         createdAt: new Date(),
+        isVisible: false, // Initially not visible
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
 
       // Speak the response with realistic OpenAI voice
-      speakWithOpenAI(data);
+      speakWithOpenAI(data, assistantMessage.id);
     } catch (error) {
       console.error('Error sending message:', error);
-      // Add error message to chat
-      const errorMessage: Message = {
+      // Add error message to chat (visible because it's an error)
+      const errorMessage: VisibleMessage = {
         id: uuidv4(),
         role: 'assistant',
         content: 'Sorry, I encountered an error. Please try again later.',
         createdAt: new Date(),
+        isVisible: true, // Error messages should be visible immediately
       };
       setMessages((prev) => [...prev, errorMessage]);
       
       // Speak the error message
-      speakWithOpenAI(errorMessage.content);
+      speakWithOpenAI(errorMessage.content, errorMessage.id);
     } finally {
       setIsLoading(false);
     }
   };
 
   // Speak text using OpenAI's TTS API
-  const speakWithOpenAI = async (text: string) => {
+  const speakWithOpenAI = async (text: string, messageId?: string) => {
     if (!text.trim() || !audioElement) return;
     
     // Stop any current speech
@@ -223,6 +237,17 @@ const VoiceChat: React.FC = () => {
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
       
+      // Make the message visible before playing audio 
+      if (messageId) {
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === messageId 
+              ? { ...msg, isVisible: true } 
+              : msg
+          )
+        );
+      }
+      
       // Play the audio
       audioElement.src = audioUrl;
       audioElement.onended = () => {
@@ -233,6 +258,17 @@ const VoiceChat: React.FC = () => {
         console.error('Audio playback error');
         setIsSpeaking(false);
         URL.revokeObjectURL(audioUrl); // Clean up
+        
+        // In case of error, make sure the message is visible
+        if (messageId) {
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === messageId 
+                ? { ...msg, isVisible: true } 
+                : msg
+            )
+          );
+        }
       };
       
       // Play the audio
@@ -240,6 +276,17 @@ const VoiceChat: React.FC = () => {
     } catch (error) {
       console.error('TTS Error:', error);
       setIsSpeaking(false);
+      
+      // In case of error, make sure the message is visible
+      if (messageId) {
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === messageId 
+              ? { ...msg, isVisible: true } 
+              : msg
+          )
+        );
+      }
     }
   };
 
@@ -436,10 +483,12 @@ const VoiceChat: React.FC = () => {
               </Box>
             ) : (
               <Box>
-                {messages.map((message) => (
+                {/* Only render messages that are visible */}
+                {messages.filter(message => message.isVisible).map((message) => (
                   <ChatMessage key={message.id} message={message} />
                 ))}
                 
+                {/* Loading indicator */}
                 {isLoading && (
                   <Box sx={{ display: 'flex', justifyContent: 'flex-start', mb: 2, px: 1 }}>
                     <Avatar 
@@ -488,7 +537,8 @@ const VoiceChat: React.FC = () => {
                   </Box>
                 )}
                 
-                {isSpeaking && (
+                {/* Speaking indicator with current AI message text */}
+                {isSpeaking && latestAssistantMessageRef.current && (
                   <Box sx={{ display: 'flex', justifyContent: 'flex-start', mb: 2, px: 1 }}>
                     <Avatar 
                       sx={{ 
@@ -508,7 +558,7 @@ const VoiceChat: React.FC = () => {
                       bgcolor: theme.palette.success.light 
                     }}>
                       <Typography variant="body2" color="success.contrastText">
-                        Speaking...
+                        Speaking with {openAIVoices.find(v => v.id === selectedVoice)?.name} voice...
                       </Typography>
                     </Paper>
                   </Box>
@@ -583,22 +633,6 @@ const VoiceChat: React.FC = () => {
                 {isLoading && (
                   <Typography variant="body2" color="text.secondary">
                     Processing your message...
-                  </Typography>
-                )}
-                
-                {isSpeaking && (
-                  <Typography 
-                    variant="body2" 
-                    color="success.main" 
-                    sx={{ 
-                      animation: 'pulse 1.5s infinite',
-                      '@keyframes pulse': {
-                        '0%, 100%': { opacity: 1 },
-                        '50%': { opacity: 0.5 }
-                      }
-                    }}
-                  >
-                    AI is speaking with {openAIVoices.find(v => v.id === selectedVoice)?.name} voice...
                   </Typography>
                 )}
               </Box>
