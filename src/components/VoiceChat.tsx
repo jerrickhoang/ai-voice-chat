@@ -325,7 +325,7 @@ const VoiceChat: React.FC = () => {
 
   // Function for demo/welcome button
   const handleStartConversation = () => {
-    submitMessage("Hello, I want to practice speaking English. Can you pretend to be an English teacher and help me practice speaking English? Limit your response to be at most 2 sentences");
+    submitMessage("Hello, I want to practice speaking English. Can you pretend to be an English teacher and help me practice speaking English? Limit your response to be at most 3 sentences");
   };
 
   // Toggle voice settings panel
