@@ -5,6 +5,11 @@ import { v4 as uuidv4 } from 'uuid';
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 import { Message, ChatMessage as ChatMessageType } from '@/types/chat';
 import ChatMessage from './ChatMessage';
+import VITSSpeech, { VITSSpeechMethods } from './VITSSpeech';
+import Switch from '@mui/material/Switch';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Alert from '@mui/material/Alert';
+import VITSTester from './VITSTester';
 
 // Material UI components
 import { 
@@ -45,14 +50,18 @@ type VoiceOption = {
   description: string;
 };
 
-// OpenAI's voice options
-const openAIVoices: VoiceOption[] = [
-  { id: 'alloy', name: 'Alloy', description: 'Versatile, balanced voice' },
-  { id: 'echo', name: 'Echo', description: 'Warm, neutral voice' },
-  { id: 'fable', name: 'Fable', description: 'Narrative, eloquent voice' },
-  { id: 'onyx', name: 'Onyx', description: 'Deep, authoritative voice' },
-  { id: 'nova', name: 'Nova', description: 'Bright, friendly voice' },
-  { id: 'shimmer', name: 'Shimmer', description: 'Clear, pleasant voice' },
+// Web Speech API voice options as fallback
+const webSpeechVoices: VoiceOption[] = [
+  { id: 'en-GB', name: 'British Voice', description: 'UK English' },
+  { id: 'en-US', name: 'American Voice', description: 'US English' },
+  { id: 'fr-FR', name: 'French Voice', description: 'French' },
+  { id: 'de-DE', name: 'German Voice', description: 'German' },
+  { id: 'it-IT', name: 'Italian Voice', description: 'Italian' },
+  { id: 'ja-JP', name: 'Japanese Voice', description: 'Japanese' },
+  { id: 'es-ES', name: 'Spanish Voice', description: 'Spanish' },
+  { id: 'ko-KR', name: 'Korean Voice', description: 'Korean' },
+  { id: 'zh-CN', name: 'Chinese Voice', description: 'Chinese' },
+  { id: 'hi-IN', name: 'Hindi Voice', description: 'Hindi' },
 ];
 
 // Create a Material UI theme function to support dark mode
@@ -77,12 +86,22 @@ type VisibleMessage = Message & {
   isVisible: boolean;
 };
 
+// Add a type for window with VITS testing functions
+interface WindowWithVITSTest {
+  testVITS: () => Promise<boolean>;
+  testVITSSynthesis: (text: string, voiceId?: string) => Promise<boolean>;
+  testVITSDownload: (voiceId: string) => Promise<boolean>;
+}
+
 const VoiceChat: React.FC = () => {
+  // Add state to track client-side mounting
+  const [isMounted, setIsMounted] = useState(false);
+  
   // Update message state to include visibility flag
   const [messages, setMessages] = useState<VisibleMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState('alloy');
+  const [selectedVoice, setSelectedVoice] = useState('en-US');
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
   // Add a reference to the latest assistant message
@@ -104,9 +123,34 @@ const VoiceChat: React.FC = () => {
     isMicrophoneAvailable
   } = useSpeechRecognition();
 
-  // Initialize audio element
+  // Add these states in the VoiceChat component near other state variables
+  const [useVITS, setUseVITS] = useState(false);
+  const [vitsStatus, setVITSStatus] = useState('Not initialized');
+  const [isVITSReady, setIsVITSReady] = useState(false);
+  const vitsSpeechRef = useRef<VITSSpeechMethods>(null);
+
+  // Add a state to track if VITS is fully functional
+  const [isVITSFullyFunctional, setIsVITSFullyFunctional] = useState(false);
+
+  // Add a state to track if we've forced VITS to be enabled
+  const [hasAttemptedVITSForce, setHasAttemptedVITSForce] = useState(false);
+
+  // Set mounted state on client-side
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    setIsMounted(true);
+  }, []);
+
+  // Enable VITS automatically when it becomes ready, even if not fully functional
+  useEffect(() => {
+    if (isVITSReady) {
+      console.log(`VoiceChat: VITS is ready with status: "${vitsStatus}", enabling automatically`);
+      setUseVITS(true);
+    }
+  }, [isVITSReady, vitsStatus]);
+
+  // Initialize audio element only on client side
+  useEffect(() => {
+    if (typeof window !== 'undefined' && isMounted) {
       const audio = new Audio();
       audio.onended = () => setIsSpeaking(false);
       setAudioElement(audio);
@@ -118,20 +162,40 @@ const VoiceChat: React.FC = () => {
         audioElement.src = '';
       }
     };
-  }, []);
+  }, [isMounted]);
 
   // Scroll to bottom whenever messages change
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (isMounted) {
+      scrollToBottom();
+    }
+  }, [messages, isMounted]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Add a useEffect with a timeout to check VITS status 2 seconds after mount
+  useEffect(() => {
+    if (isMounted && !hasAttemptedVITSForce) {
+      const timeoutId = setTimeout(() => {
+        console.log("VoiceChat: Timeout check for VITS status");
+        if (!useVITS && vitsSpeechRef.current) {
+          console.log("VoiceChat: VITS reference exists but not enabled, forcing...");
+          forceEnableVITS();
+          setHasAttemptedVITSForce(true);
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isMounted, useVITS, hasAttemptedVITSForce]);
+
   // Function to submit message - the single point of sending messages to the API
   const submitMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
+    
+    console.log(`VoiceChat: Submitting message: "${content.substring(0, 50)}..."`);
     
     // Add user message to the chat (always visible)
     const userMessage: VisibleMessage = {
@@ -154,6 +218,8 @@ const VoiceChat: React.FC = () => {
           content,
         }));
 
+      console.log(`VoiceChat: Sending ${apiMessages.length} messages to API`);
+      
       // Send messages to the API
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -164,10 +230,13 @@ const VoiceChat: React.FC = () => {
       });
 
       if (!response.ok) {
+        console.error(`VoiceChat: API error with status ${response.status}`);
         throw new Error(`Error: ${response.status}`);
       }
 
+      console.log('VoiceChat: Response received, extracting text');
       const data = await response.text();
+      console.log(`VoiceChat: Received response: "${data.substring(0, 50)}..."`);
       
       // Store the latest assistant message for reference
       latestAssistantMessageRef.current = data;
@@ -182,11 +251,12 @@ const VoiceChat: React.FC = () => {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+      console.log('VoiceChat: Added assistant message to chat, starting TTS');
 
-      // Speak the response with realistic OpenAI voice
+      // Speak the response with responsive voice
       speakWithOpenAI(data, assistantMessage.id);
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('VoiceChat: Error sending message:', error);
       // Add error message to chat (visible because it's an error)
       const errorMessage: VisibleMessage = {
         id: uuidv4(),
@@ -204,90 +274,190 @@ const VoiceChat: React.FC = () => {
     }
   };
 
-  // Speak text using OpenAI's TTS API
+  // Speak text using VITS for best quality with Web Speech API fallback
   const speakWithOpenAI = async (text: string, messageId?: string) => {
-    if (!text.trim() || !audioElement) return;
+    console.log(`VoiceChat TTS: Starting speech synthesis with text: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
     
-    // Stop any current speech
-    if (isSpeaking && audioElement) {
-      audioElement.pause();
-      audioElement.src = '';
+    // Safety checks
+    if (!isMounted) {
+      console.error("VoiceChat TTS: Component not mounted, can't speak");
+      return;
+    }
+    
+    if (!text || text.trim() === '') {
+      console.error("VoiceChat TTS: Empty text provided, can't speak");
+      return;
+    }
+    
+    // Make message visible if messageId is provided
+    if (messageId) {
+      console.log('VoiceChat TTS: Making message visible');
+      setMessages(prev => 
+        prev.map(msg => 
+          msg.id === messageId 
+            ? { ...msg, isVisible: true } 
+            : msg
+        )
+      );
+    }
+    
+    // Cancel any ongoing speech first
+    try {
+      if (typeof window !== 'undefined') {
+        if (window.speechSynthesis && window.speechSynthesis.speaking) {
+          console.log("VoiceChat TTS: Cancelling previous Web Speech API speech");
+          window.speechSynthesis.cancel();
+        }
+        
+        // Signal to stop any existing audio
+        if (audioElement) {
+          console.log("VoiceChat TTS: Stopping any existing audio playback");
+          audioElement.pause();
+          audioElement.src = '';
+        }
+      }
+    } catch (error) {
+      console.error("VoiceChat TTS: Error cancelling previous speech", error);
     }
     
     setIsSpeaking(true);
-    
-    try {
-      // Call our TTS API endpoint
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          text,
-          voice: selectedVoice,
-        }),
-      });
+   
+    // Print TTS system status for debugging
+    console.log(`VoiceChat TTS: Status - VITS enabled: ${useVITS}, VITS ready: ${isVITSReady}, VITS fully functional: ${isVITSFullyFunctional}, VITS ref exists: ${!!vitsSpeechRef.current}`);
 
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-
-      // Get the audio blob
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
+    // APPROACH 1: Try to use direct VITS from VITSTester if available
+    if (useVITS && typeof window !== 'undefined') {
+      // Use a safer typecasting approach
+      const win = window as unknown as WindowWithVITSTest;
       
-      // Make the message visible before playing audio 
-      if (messageId) {
-        setMessages(prev => 
-          prev.map(msg => 
-            msg.id === messageId 
-              ? { ...msg, isVisible: true } 
-              : msg
-          )
-        );
-      }
-      
-      // Play the audio
-      audioElement.src = audioUrl;
-      audioElement.onended = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl); // Clean up
-      };
-      audioElement.onerror = () => {
-        console.error('Audio playback error');
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl); // Clean up
-        
-        // In case of error, make sure the message is visible
-        if (messageId) {
-          setMessages(prev => 
-            prev.map(msg => 
-              msg.id === messageId 
-                ? { ...msg, isVisible: true } 
-                : msg
-            )
-          );
+      if (win.testVITSSynthesis) {
+        console.log("VoiceChat TTS: Attempting to use VITS via testVITSSynthesis");
+        try {
+          const result = await win.testVITSSynthesis(text);
+          if (result) {
+            console.log("VoiceChat TTS: Successfully used VITS via testVITSSynthesis");
+            // The speech will be handled by testVITSSynthesis, so we just need to reset speaking state
+            setTimeout(() => setIsSpeaking(false), 1000); // Give it a second to start speaking
+            return;
+          }
+        } catch (error) {
+          console.error("VoiceChat TTS: Error using testVITSSynthesis:", error);
+          // Continue to next approach
         }
-      };
-      
-      // Play the audio
-      audioElement.play();
-    } catch (error) {
-      console.error('TTS Error:', error);
-      setIsSpeaking(false);
-      
-      // In case of error, make sure the message is visible
-      if (messageId) {
-        setMessages(prev => 
-          prev.map(msg => 
-            msg.id === messageId 
-              ? { ...msg, isVisible: true } 
-              : msg
-          )
-        );
       }
     }
+
+    // APPROACH 2: Try to use VITS through vitsSpeechRef
+    if (useVITS && vitsSpeechRef.current) {
+      console.log("VoiceChat TTS: Attempting to use VITS speech via ref");
+      try {
+        // First synthesize the audio
+        const audioBlob = await vitsSpeechRef.current.synthesize(text);
+        
+        if (audioBlob) {
+          console.log("VoiceChat TTS: VITS synthesis successful, creating audio element");
+          // Create an audio element to play the synthesized speech
+          const audio = new Audio(URL.createObjectURL(audioBlob));
+          
+          audio.onplay = () => {
+            console.log("VoiceChat TTS: VITS speech started");
+            setIsSpeaking(true);
+          };
+          
+          audio.onended = () => {
+            console.log("VoiceChat TTS: VITS speech completed");
+            setIsSpeaking(false);
+          };
+          
+          audio.onerror = () => {
+            console.error("VoiceChat TTS: VITS speech playback error");
+            setIsSpeaking(false);
+            
+            // Fallback to Web Speech API
+            console.log("VoiceChat TTS: Falling back to Web Speech API after VITS failure");
+            speakWithWebSpeech(text);
+          };
+          
+          // Play the audio
+          console.log("VoiceChat TTS: Attempting to play VITS audio");
+          audio.play().catch((error: Error) => {
+            console.error("VoiceChat TTS: Error playing VITS audio", error);
+            setIsSpeaking(false);
+            
+            // Try fallback
+            speakWithWebSpeech(text);
+          });
+          
+          return; // Exit early if VITS is used successfully
+        } else {
+          console.error("VoiceChat TTS: VITS synthesis returned null blob");
+          // Continue to fallbacks
+        }
+      } catch (error) {
+        console.error("VoiceChat TTS: Error initiating VITS speech:", error);
+        // Continue to fallbacks
+      }
+    }
+
+    // Function to use Web Speech API as fallback
+    const speakWithWebSpeech = (speechText: string) => {
+      console.log("VoiceChat TTS: Using Web Speech API");
+      
+      if (typeof window === 'undefined' || !window.speechSynthesis) {
+        console.error("VoiceChat TTS: Web Speech API not available");
+        setIsSpeaking(false);
+        return;
+      }
+      
+      try {
+        const utterance = new SpeechSynthesisUtterance(speechText);
+        
+        // Use the selected language
+        const availableVoices = window.speechSynthesis.getVoices();
+        console.log(`VoiceChat TTS: Found ${availableVoices.length} Web Speech API voices`);
+        
+        const matchingVoice = availableVoices.find(voice => 
+          voice.lang === selectedVoice && voice.localService
+        ) || availableVoices.find(voice => 
+          voice.lang === selectedVoice
+        ) || availableVoices.find(voice => 
+          voice.lang.startsWith(selectedVoice.split('-')[0])
+        );
+        
+        if (matchingVoice) {
+          console.log(`VoiceChat TTS: Using Web Speech API voice: ${matchingVoice.name}`);
+          utterance.voice = matchingVoice;
+        } else {
+          console.warn(`VoiceChat TTS: No matching voice found for ${selectedVoice}`);
+        }
+        
+        utterance.pitch = 1.0;
+        utterance.rate = 1.0;
+        utterance.volume = 1.0;
+        
+        utterance.onstart = () => {
+          console.log("VoiceChat TTS: Web Speech API speech started");
+          setIsSpeaking(true);
+        };
+        
+        utterance.onend = () => {
+          console.log("VoiceChat TTS: Web Speech API speech completed");
+          setIsSpeaking(false);
+        };
+        
+        utterance.onerror = (event) => {
+          console.error("VoiceChat TTS: Web Speech API error", event);
+          setIsSpeaking(false);
+        };
+        
+        window.speechSynthesis.speak(utterance);
+      } catch (error) {
+        console.error("VoiceChat TTS: Error using Web Speech API", error);
+        setIsSpeaking(false);
+      }
+    };
+    
+    speakWithWebSpeech(text);
   };
 
   // Handle microphone button click
@@ -325,7 +495,7 @@ const VoiceChat: React.FC = () => {
 
   // Function for demo/welcome button
   const handleStartConversation = () => {
-    submitMessage("Hello, I want to practice speaking English. Can you pretend to be an English teacher and help me practice speaking English? Limit your response to be at most 3 sentences");
+    submitMessage("Hello, I want to practice speaking English. Can you pretend to be an English teacher and help me practice speaking English? Limit your response to be at most 2 sentences");
   };
 
   // Toggle voice settings panel
@@ -335,7 +505,9 @@ const VoiceChat: React.FC = () => {
 
   // Test the selected voice
   const testVoice = () => {
-    speakWithOpenAI("This is a test of my voice. How do I sound? I hope you enjoy chatting with me using this realistic voice.");
+    const testText = "This is a test of my voice. How do I sound? I hope you enjoy chatting with me using this realistic voice.";
+    console.log(`VoiceChat: Testing voice with VITS ${useVITS ? 'enabled' : 'disabled'}`);
+    speakWithOpenAI(testText);
   };
 
   // Toggle dark mode
@@ -343,8 +515,131 @@ const VoiceChat: React.FC = () => {
     setDarkMode(!darkMode);
   };
 
-  // Check if browser supports speech recognition
-  if (!browserSupportsSpeechRecognition) {
+  // Add this function to directly test VITS synthesis without going through the full speech pipeline
+  const testVITSDirectly = async () => {
+    console.log("VoiceChat: Testing VITS directly, ref exists:", !!vitsSpeechRef.current, "isVITSReady:", isVITSReady);
+    
+    if (!vitsSpeechRef.current) {
+      console.error("VoiceChat: Cannot test VITS - missing reference");
+      return;
+    }
+    
+    if (!isVITSReady) {
+      console.error("VoiceChat: Cannot test VITS - not ready");
+      return;
+    }
+    
+    try {
+      console.log("VoiceChat: Testing VITS synthesis directly");
+      const testText = "This is a direct test of the VITS neural voice system.";
+      
+      // Try to synthesize using VITS
+      const blob = await vitsSpeechRef.current.synthesize(testText);
+      
+      if (blob) {
+        console.log("VoiceChat: VITS synthesis successful, blob size:", blob.size);
+        
+        // Create and play audio
+        const audio = new Audio(URL.createObjectURL(blob));
+        audio.onplay = () => console.log("VoiceChat: VITS test audio playing");
+        audio.onended = () => console.log("VoiceChat: VITS test audio completed");
+        audio.onerror = (e) => console.error("VoiceChat: VITS test audio error", e);
+        
+        await audio.play();
+        console.log("VoiceChat: VITS test successful");
+      } else {
+        console.error("VoiceChat: VITS synthesis returned null blob in direct test");
+      }
+    } catch (error) {
+      console.error("VoiceChat: Error testing VITS directly:", error);
+    }
+  };
+
+  // Add a new useEffect to force enable VITS when vitsSpeechRef becomes available
+  // This will ensure VITS gets used regardless of other status flags
+  useEffect(() => {
+    if (isMounted && vitsSpeechRef.current) {
+      console.log("VoiceChat: VITS reference is available, enabling VITS");
+      setIsVITSReady(true);
+      setUseVITS(true);
+    }
+  }, [isMounted, vitsSpeechRef.current]);
+
+  // Improve the VITS component rendering to ensure it's always there
+  const renderVITSSpeech = () => {
+    console.log("VoiceChat: Rendering VITS component, isMounted:", isMounted);
+    
+    // Force VITS ready if we already have a reference to it
+    // This ensures we'll use VITS even if the status callbacks didn't fire properly
+    if (vitsSpeechRef.current && !isVITSReady) {
+      console.log("VoiceChat: VITS ref exists but not marked ready, fixing...");
+      setIsVITSReady(true);
+    }
+    
+    return (
+      <Box sx={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
+        <VITSSpeech
+          ref={vitsSpeechRef}
+          onReady={(ready) => {
+            console.log("VoiceChat: VITS reported ready state:", ready);
+            setIsVITSReady(ready);
+          }}
+          onStatusChange={(status) => {
+            console.log("VoiceChat: VITS status change:", status);
+            setVITSStatus(status);
+            // Check if VITS is fully functional based on status message
+            setIsVITSFullyFunctional(status === 'Ready to speak');
+            
+            // If we see certain status messages, log additional info for debugging
+            if (status.includes('failed') || status.includes('error')) {
+              console.error("VoiceChat: VITS encountered an error:", status);
+            }
+          }}
+        />
+      </Box>
+    );
+  };
+
+  // Helper function to force enable VITS
+  const forceEnableVITS = () => {
+    console.log("VoiceChat: Forcing VITS to be enabled");
+    setIsVITSReady(true);
+    setUseVITS(true);
+    setVITSStatus("Ready (forced)");
+  };
+
+  // Add the forceVITSInitialization function
+  const forceVITSInitialization = () => {
+    console.log("VoiceChat: Manually forcing VITS initialization");
+    
+    // Try to directly use the VITSTester
+    if (typeof window !== 'undefined') {
+      const win = window as unknown as WindowWithVITSTest;
+      
+      if (win.testVITS) {
+        console.log("VoiceChat: Using VITSTester to initialize VITS");
+        win.testVITS().then((result: boolean) => {
+          console.log("VoiceChat: VITSTester initialization result:", result);
+          
+          if (result) {
+            // Force flags regardless of other status
+            setIsVITSReady(true);
+            setUseVITS(true);
+            setVITSStatus("Ready (manually initialized)");
+            setHasAttemptedVITSForce(true);
+          }
+        });
+      } else {
+        console.log("VoiceChat: VITSTester not available, forcing flags directly");
+        forceEnableVITS();
+      }
+    } else {
+      forceEnableVITS();
+    }
+  };
+
+  // Check if browser supports speech recognition - only on client side
+  if (isMounted && !browserSupportsSpeechRecognition) {
     return (
       <ThemeProvider theme={theme}>
         <CssBaseline />
@@ -359,8 +654,8 @@ const VoiceChat: React.FC = () => {
     );
   }
 
-  // Check if microphone is available
-  if (!isMicrophoneAvailable) {
+  // Check if microphone is available - only on client side
+  if (isMounted && !isMicrophoneAvailable) {
     return (
       <ThemeProvider theme={theme}>
         <CssBaseline />
@@ -379,7 +674,7 @@ const VoiceChat: React.FC = () => {
       <CssBaseline />
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         {/* Header AppBar */}
-        <AppBar position="static" elevation={0} color="primary">
+        <AppBar position="static" color="primary">
           <Toolbar>
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               AI Voice Assistant
@@ -409,23 +704,67 @@ const VoiceChat: React.FC = () => {
             >
               <Typography variant="h6" gutterBottom>Voice Settings</Typography>
               
-              <FormControl fullWidth sx={{ mb: 2 }}>
-                <InputLabel id="voice-select-label">AI Voice</InputLabel>
-                <Select
-                  labelId="voice-select-label"
-                  value={selectedVoice}
-                  label="AI Voice"
-                  onChange={handleVoiceChange}
-                >
-                  {openAIVoices.map((voice) => (
-                    <MenuItem key={voice.id} value={voice.id}>
-                      {voice.name} - {voice.description}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', mb: 2 }}>
+                <FormControlLabel 
+                  control={
+                    <Switch
+                      checked={useVITS}
+                      onChange={(e) => setUseVITS(e.target.checked)}
+                      color="primary"
+                      disabled={!isVITSReady}
+                    />
+                  }
+                  label={
+                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                      <Typography variant="body2">Use VITS Neural Voice (Highest Quality)</Typography>
+                      <Typography 
+                        variant="caption" 
+                        color={isVITSReady && isVITSFullyFunctional ? "success.main" : "text.secondary"}
+                      >
+                        {isVITSReady && isVITSFullyFunctional 
+                          ? '✓ Ultra-realistic voice with natural intonation (runs locally)' 
+                          : isVITSReady && !isVITSFullyFunctional
+                            ? '⚠️ Limited functionality - may have issues but usable'
+                            : `Status: ${vitsStatus}`}
+                      </Typography>
+                    </Box>
+                  }
+                />
+              </Box>
               
-              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              {!useVITS && (
+                <FormControl fullWidth sx={{ mb: 2 }}>
+                  <InputLabel id="voice-select-label">Browser Voice</InputLabel>
+                  <Select
+                    labelId="voice-select-label"
+                    value={selectedVoice}
+                    label="Browser Voice"
+                    onChange={handleVoiceChange}
+                  >
+                    {webSpeechVoices.map((voice) => (
+                      <MenuItem key={voice.id} value={voice.id}>
+                        {voice.name} - {voice.description}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              )}
+              
+              {useVITS && isVITSFullyFunctional && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Using VITS neural voice technology for highest quality speech synthesis. 
+                  This runs entirely on your device for privacy and low latency.
+                </Alert>
+              )}
+              
+              {isVITSReady && !isVITSFullyFunctional && useVITS && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  VITS is running with limited functionality. Some features may not work correctly.
+                  If you experience issues, switch to Web Speech API instead.
+                </Alert>
+              )}
+              
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}>
                 <Button 
                   variant="contained" 
                   color="primary" 
@@ -436,8 +775,33 @@ const VoiceChat: React.FC = () => {
                 >
                   Test Voice
                 </Button>
+                
+                <Button 
+                  variant="outlined" 
+                  color="secondary" 
+                  onClick={forceVITSInitialization}
+                  disabled={isSpeaking}
+                  size="small"
+                >
+                  Force VITS Initialization
+                </Button>
+                
+                {isVITSReady && (
+                  <Button 
+                    variant="outlined" 
+                    color="info" 
+                    onClick={testVITSDirectly}
+                    disabled={isSpeaking}
+                    size="small"
+                  >
+                    Test VITS Directly
+                  </Button>
+                )}
+                
                 <Typography variant="caption" color="text.secondary">
-                  Note: Using OpenAI&apos;s realistic TTS voices
+                  {useVITS && isVITSFullyFunctional
+                    ? "Note: Using neural TTS for ultra-realistic voice" 
+                    : "Note: Using browser's built-in voice synthesis"}
                 </Typography>
               </Box>
             </Paper>
@@ -558,7 +922,9 @@ const VoiceChat: React.FC = () => {
                       bgcolor: theme.palette.success.light 
                     }}>
                       <Typography variant="body2" color="success.contrastText">
-                        Speaking with {openAIVoices.find(v => v.id === selectedVoice)?.name} voice...
+                        {useVITS 
+                          ? "Speaking with Neural TTS voice..." 
+                          : "Speaking with browser voice..."}
                       </Typography>
                     </Paper>
                   </Box>
@@ -669,6 +1035,12 @@ const VoiceChat: React.FC = () => {
             </Typography>
           </Box>
         </Box>
+
+        {/* VITS component - ensuring it's always rendered */}
+        {isMounted && renderVITSSpeech()}
+        
+        {/* Add VITSTester for debugging */}
+        {isMounted && <VITSTester />}
       </Box>
     </ThemeProvider>
   );
