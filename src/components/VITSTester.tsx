@@ -1,14 +1,7 @@
 "use client";
 
 import React, { useEffect } from 'react';
-
-// Define proper types for the VITS module
-interface VITSModule {
-  voices: () => Promise<string[]>;
-  stored: () => Promise<string[]>;
-  predict: (params: { text: string; voiceId: VoiceId }) => Promise<Blob>;
-  download: (voiceId: VoiceId, progressCallback: (progress: { loaded: number; total: number }) => void) => Promise<void>;
-}
+import { loadVITSModule } from '../lib/vitsLoader';
 
 // Define the valid voice IDs
 type VoiceId = string;
@@ -24,23 +17,6 @@ interface ExtendedWindow extends Window {
 // This component doesn't render anything visible
 // It's solely for testing VITS in the browser console
 const VITSTester: React.FC = () => {
-  // Try to dynamically import the VITS module
-  const tryImportVITSModule = async (): Promise<VITSModule | null> => {
-    try {
-      const vitsModule = await import('@diffusionstudio/vits-web').catch(e => {
-        console.warn('VITS Tester: VITS module failed to load:', e.message);
-        return null;
-      });
-      
-      if (!vitsModule) return null;
-      
-      return vitsModule as unknown as VITSModule;
-    } catch (error) {
-      console.warn('VITS Tester: VITS module is not available:', error instanceof Error ? error.message : String(error));
-      return null;
-    }
-  };
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
@@ -56,8 +32,8 @@ const VITSTester: React.FC = () => {
       console.log('VITS Tester: Starting VITS test...');
       
       try {
-        console.log('VITS Tester: Importing VITS module');
-        const vitsModule = await tryImportVITSModule();
+        console.log('VITS Tester: Loading VITS module via vitsLoader');
+        const vitsModule = await loadVITSModule();
         
         if (!vitsModule) {
           console.warn('VITS Tester: VITS module could not be loaded');
@@ -67,7 +43,7 @@ const VITSTester: React.FC = () => {
           return false;
         }
         
-        console.log('VITS Tester: VITS module imported successfully');
+        console.log('VITS Tester: VITS module loaded successfully');
         console.log('VITS Tester: Available methods:', Object.keys(vitsModule).join(', '));
         
         // Set the flag to indicate VITS is available

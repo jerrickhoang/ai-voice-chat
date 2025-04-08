@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { CircularProgress, Typography, Box, Alert } from '@mui/material';
 import dynamic from 'next/dynamic';
+import { loadVITSModule } from '../lib/vitsLoader';
 
 // Define a more flexible interface for voice data to accommodate the actual structure
 interface VoiceData {
@@ -97,13 +98,15 @@ const VITSSpeechComponent = forwardRef<VITSSpeechMethods, VITSSpeechProps>(({ on
         console.log(`VITS TTS: Loading library (attempt ${initializationAttempts + 1}/5)...`);
         onStatusChange('Loading speech engine...');
         
-        // Dynamically import the library with error handling
-        console.log('VITS TTS: Attempting to import @diffusionstudio/vits-web');
-        const vitsModule = await import('@diffusionstudio/vits-web').catch(e => {
-          console.error('VITS TTS: Failed to import library:', e.message);
-          if (!isMounted) return null;
+        // Use our safer loader method
+        console.log('VITS TTS: Attempting to load module via vitsLoader');
+        const vitsModule = await loadVITSModule();
+        
+        if (!vitsModule) {
+          console.error('VITS TTS: Failed to load module');
+          if (!isMounted) return;
           
-          setError(`Import error: ${e.message}`);
+          setError('Import error: Module could not be loaded');
           onStatusChange('Speech engine not available');
           setIsInitializing(false);
           
@@ -115,18 +118,12 @@ const VITSSpeechComponent = forwardRef<VITSSpeechMethods, VITSSpeechProps>(({ on
             onStatusChange('Ready with limited capability');
           }
           
-          return null;
-        });
-        
-        if (!vitsModule) {
-          console.log('VITS TTS: Library import returned null');
-          setInitializationAttempts(prev => prev + 1);
           return;
         }
         
         if (!isMounted) return;
         
-        console.log('VITS TTS: Library imported successfully, module:', Object.keys(vitsModule).join(', '));
+        console.log('VITS TTS: Library loaded successfully, module:', Object.keys(vitsModule).join(', '));
         
         // Configure the module to use our proxy
         const proxiedModule = configureVITSProxy(vitsModule);
