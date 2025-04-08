@@ -18,11 +18,29 @@ interface ExtendedWindow extends Window {
   testVITS?: () => Promise<boolean>;
   testVITSSynthesis?: (text: string, voiceId?: VoiceId) => Promise<boolean>;
   testVITSDownload?: (voiceId: VoiceId) => Promise<boolean>;
+  isVITSAvailable?: boolean;
 }
 
 // This component doesn't render anything visible
 // It's solely for testing VITS in the browser console
 const VITSTester: React.FC = () => {
+  // Try to dynamically import the VITS module
+  const tryImportVITSModule = async (): Promise<VITSModule | null> => {
+    try {
+      const vitsModule = await import('@diffusionstudio/vits-web').catch(e => {
+        console.warn('VITS Tester: VITS module failed to load:', e.message);
+        return null;
+      });
+      
+      if (!vitsModule) return null;
+      
+      return vitsModule as unknown as VITSModule;
+    } catch (error) {
+      console.warn('VITS Tester: VITS module is not available:', error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
@@ -31,15 +49,29 @@ const VITSTester: React.FC = () => {
     
     const win = window as unknown as ExtendedWindow;
     
+    // Set a flag to indicate VITS availability
+    win.isVITSAvailable = false;
+    
     win.testVITS = async () => {
       console.log('VITS Tester: Starting VITS test...');
       
       try {
         console.log('VITS Tester: Importing VITS module');
-        const vitsModule = await import('@diffusionstudio/vits-web') as unknown as VITSModule;
+        const vitsModule = await tryImportVITSModule();
+        
+        if (!vitsModule) {
+          console.warn('VITS Tester: VITS module could not be loaded');
+          win.isVITSAvailable = false;
+          // Dispatch event that VITS is not available
+          window.dispatchEvent(new CustomEvent('vits-unavailable', { detail: { reason: 'module-not-found' } }));
+          return false;
+        }
         
         console.log('VITS Tester: VITS module imported successfully');
         console.log('VITS Tester: Available methods:', Object.keys(vitsModule).join(', '));
+        
+        // Set the flag to indicate VITS is available
+        win.isVITSAvailable = true;
         
         // Test voices method
         if (typeof vitsModule.voices === 'function') {
@@ -114,6 +146,9 @@ const VITSTester: React.FC = () => {
         return true;
       } catch (error) {
         console.error('VITS Tester: Error initializing VITS:', error);
+        // Dispatch event that VITS failed to initialize
+        window.dispatchEvent(new CustomEvent('vits-unavailable', { detail: { reason: 'initialization-error' } }));
+        win.isVITSAvailable = false;
         return false;
       }
     };
@@ -123,6 +158,7 @@ const VITSTester: React.FC = () => {
       if (win.testVITS) win.testVITS = undefined;
       if (win.testVITSSynthesis) win.testVITSSynthesis = undefined;
       if (win.testVITSDownload) win.testVITSDownload = undefined;
+      if ('isVITSAvailable' in win) win.isVITSAvailable = undefined;
     };
   }, []);
 
@@ -153,23 +189,47 @@ const VITSTester: React.FC = () => {
                 type AudioContextType = typeof AudioContext;
                 const AudioCtx = (window.AudioContext || 
                   ((window as unknown as { webkitAudioContext?: AudioContextType }).webkitAudioContext)) as AudioContextType;
-                const audioContext = new AudioCtx();
-                await audioContext.resume();
                 
-                // Run the synthesis with a short text
-                await win.testVITSSynthesis?.('Hello world');
-                console.log('VITS Tester: Auto-synthesis completed');
-                
-                // Dispatch a custom event that the VITS system is ready
-                window.dispatchEvent(new CustomEvent('vits-ready'));
+                try {
+                  const audioContext = new AudioCtx();
+                  await audioContext.resume();
+                  
+                  // Run the synthesis with a short text
+                  if (win.testVITSSynthesis) {
+                    await win.testVITSSynthesis('Hello world');
+                    console.log('VITS Tester: Auto-synthesis completed');
+                    
+                    // Dispatch a custom event that the VITS system is ready
+                    window.dispatchEvent(new CustomEvent('vits-ready'));
+                  }
+                } catch (audioError) {
+                  console.error('VITS Tester: Audio context error:', audioError);
+                  // Still dispatch the ready event, audio can be initialized on user interaction
+                  window.dispatchEvent(new CustomEvent('vits-ready', { detail: { audioInitialized: false } }));
+                }
               } catch (error) {
                 console.error('VITS Tester: Error in auto-synthesis:', error);
+                // Dispatch that VITS is available but synthesis failed
+                window.dispatchEvent(new CustomEvent('vits-ready', { detail: { synthesisTested: false } }));
               }
             }, 1000);
+          } else {
+            // If VITS initialization failed, dispatch unavailable event
+            window.dispatchEvent(new CustomEvent('vits-unavailable', { 
+              detail: { reason: 'initialization-failed' } 
+            }));
           }
         } catch (error) {
           console.error('VITS Tester: Error in auto-initialization:', error);
+          window.dispatchEvent(new CustomEvent('vits-unavailable', { 
+            detail: { reason: 'initialization-error', error: String(error) } 
+          }));
         }
+      } else {
+        console.warn('VITS Tester: testVITS function not available');
+        window.dispatchEvent(new CustomEvent('vits-unavailable', { 
+          detail: { reason: 'function-not-available' } 
+        }));
       }
     }, 500);
     

@@ -97,9 +97,33 @@ const VITSSpeechComponent = forwardRef<VITSSpeechMethods, VITSSpeechProps>(({ on
         console.log(`VITS TTS: Loading library (attempt ${initializationAttempts + 1}/5)...`);
         onStatusChange('Loading speech engine...');
         
-        // Dynamically import the library
+        // Dynamically import the library with error handling
         console.log('VITS TTS: Attempting to import @diffusionstudio/vits-web');
-        const vitsModule = await import('@diffusionstudio/vits-web');
+        const vitsModule = await import('@diffusionstudio/vits-web').catch(e => {
+          console.error('VITS TTS: Failed to import library:', e.message);
+          if (!isMounted) return null;
+          
+          setError(`Import error: ${e.message}`);
+          onStatusChange('Speech engine not available');
+          setIsInitializing(false);
+          
+          // After 3 attempts, allow limited functionality
+          if (initializationAttempts >= 3) {
+            console.log('VITS TTS: Maximum attempts reached, allowing limited functionality');
+            setIsInitialized(true);
+            onReady(true);
+            onStatusChange('Ready with limited capability');
+          }
+          
+          return null;
+        });
+        
+        if (!vitsModule) {
+          console.log('VITS TTS: Library import returned null');
+          setInitializationAttempts(prev => prev + 1);
+          return;
+        }
+        
         if (!isMounted) return;
         
         console.log('VITS TTS: Library imported successfully, module:', Object.keys(vitsModule).join(', '));

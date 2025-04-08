@@ -10,7 +10,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@diffusionstudio/vits-web": "^1.0.23",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@mui/icons-material": "^7.0.1",
@@ -24,6 +23,9 @@
     "react-speech-recognition": "^4.0.0",
     "regenerator-runtime": "^0.14.1",
     "uuid": "^11.1.0"
+  },
+  "optionalDependencies": {
+    "@diffusionstudio/vits-web": "^1.0.23"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
